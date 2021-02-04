@@ -4,16 +4,18 @@ import pyspark
 from pyspark.sql import *
 from pyspark.sql.types import *
 from pyspark.sql import functions as f
-from pyspark import SparkContext, SparkConf
+from pyspark import SparkConf
 import psycopg2
-import os
-
 
 class Vars:
     """Function to get Variables from a stored class"""
     def __init__(self):
         self.url = '../data/credit_unions.csv'
         self.hostName = 'noahcook_db_1'
+        self.databaseName = 'irs990'
+        self.username = 'postgres'
+        self.password = 'postgres1234'
+        self.port = '5432'
         self.eins = ''
         self.pandasBool = False
         self.filterBool = True
@@ -22,9 +24,21 @@ class Vars:
         """Function to get Variables from a stored class as a string"""
         return 'No string for you!'
 
-    def setHostName(self, name):
-        assert isinstance(name, str)
-        self.hostName = name
+    def setHostName(self, hostName):
+        assert isinstance(hostName, str)
+        self.hostName = hostName
+        
+    def setDatabaseName(self, dbName):
+        assert isinstance(dbName, str)
+        self.databaseName = dbName
+        
+    def setUsername(self, username):
+        assert isinstance(username, str)
+        self.username = username
+        
+    def setPassword(self, password):
+        assert isinstance(password, str)
+        self.password = password
         
     def setURL(self, url):
         assert isinstance(url, str)
@@ -37,49 +51,51 @@ class Vars:
     def setFilterBool(self, filterBool):
         assert isinstance(filterBool, bool)
         self.filterBool = filterBool
+        
+    
+    # Add spark port if necessary for later.
+        
 
 
 variables = Vars()
 
 
-def getSparkTable(tableName, hostName='', eins='', pandasBool=False, filterBool=True):
-    """Pulls given table from irs990 database."""
-    if hostName == '':
-        hostName = variables.hostName
-    if not pandasBool:
-        pandasBool = variables.pandasBool
-    if filterBool:
-        filterBool = variables.filterBool
+def getSparkTable(tableName, hostName='', databaseName='', username='', password='', port='', eins='', pandasBool=None, filterBool=None):
+    """Pulls given table from givem database."""
+    hostName, databaseName, username, password, port, pandasBool, filterBool = \
+        getDefaults(hostName, databaseName, username, password, port, pandasBool, filterBool)
 
-    connection = makeConnection(hostName)
+    
+    connection = makeConnection(hostName, databaseName, username, password, port)
 
     spark = makeSession()
 
-    table = pullTable(spark, tableName, hostName)
+    table = pullTable(spark, tableName, hostName, databaseName, username, password, port)
 
     filtered_table = filterTable(table, eins)
 
-    filtered_pandas = filtered_table.toPandas()
-
-    if pandasBool:
-        return filtered_pandas
-    elif filterBool:
+    if filterBool:
+        if pandasBool:
+            return filtered_table.toPandas()
         return filtered_table
-    else:
-        return table
+            
+    elif pandasBool:
+        return table.toPandas()
+    return table
 
 
-def makeConnection(hostName=''):
-    """Makes a connections to the irs 990 table.  Requires name of db docker container name."""
-    if hostName == '':
-        hostName = variables.hostName
+def makeConnection(hostName='', databaseName='', username='', password='', port=''):
+    """Makes a connections to the given database.  Requires name of db docker container name."""
+    hostName, databaseName, username, password, port = \
+        getDefaults(hostName, databaseName, username, password, port)[0:5]
+    
     # Actually making the connection
     connection = psycopg2.connect(
         host = hostName, # Name of database docker container
-        database = 'irs990', # Name of database
-        user = 'postgres', # Username for our database
-        password = 'postgres1234', # Password for our database
-        port='5432' # Port to be used for our connection
+        database = databaseName, # Name of database
+        user = username, # Username for our database
+        password = password, # Password for our database  (Currently this function works without this line, unsure if this is because password is saved)
+        port = port # Port to be used for our connection
     )
     
     return connection
@@ -93,7 +109,7 @@ def makeSession():
     .set('spark.executor.memory', '4G') # RAM available to our spark session
     .set('spark.driver.memory', '45G') # Simulated HDD for our spark session
     .set('spark.driver.maxResultSize', '10G') # Size of largest results back from requests
-    .set('spark.jars', '/home/jovyan/scratch/postgresql-42.2.18.jar')) # Not sure what this does????
+    .set('spark.jars', '/home/jovyan/scratch/postgresql-42.2.18.jar')) # Similar to a dll, its a type of additional java stuff
     
     # Create the session
     spark = SparkSession.builder \
@@ -104,16 +120,17 @@ def makeSession():
     return spark
     
 
-def pullTable(spark, tableName, hostName=''):
+def pullTable(spark, tableName, hostName='', databaseName='', username='', password='', port=''):
     """Retrieves table from irs990 database.  Needs table name and db docker container name."""
-    if hostName == '':
-        hostName = variables.hostName
+    hostName, databaseName, username, password, port = \
+        getDefaults(hostName, databaseName, username, password, port)[0:5]
+    
     # Creating the properties for the table that we are going to pull from our database
     table_properties = {
     'driver': 'org.postgresql.Driver',  # should match the type of sql that our db uses I think
-    'url': 'jdbc:postgresql://' + hostName + ':5432/irs990', # Location of where our database is
-    'user': 'postgres', # Username for our database
-    'password': 'postgres1234', # Password for our database
+    'url': 'jdbc:postgresql://' + hostName + ':' + port + '/' + databaseName, # Location of where our database is
+    'user': username, # Username for our database
+    'password': password, # Password for our database  (Currently this function works without this line, unsure if this is because password is saved)
     'dbtable': tableName, # Name of table in our database that we want to pull
     }
     
@@ -142,3 +159,24 @@ def getEINS(url=''):
     dat = pd.read_csv(url)
     # create list of CUs eins
     return dat.ein.to_list()
+
+def getDefaults(hostName, databaseName, username, password, port, pandasBool=None, filterBool=None):
+    if hostName == '':
+        hostName = variables.hostName
+    if databaseName == '':
+        databaseName = variables.databaseName
+    if username == '':
+        username = variables.username
+    if password == '':
+        password = variables.password
+    if type(port) == int:
+        port = str(port)
+    elif port == '':
+        port = variables.port
+    if pandasBool is None:
+        pandasBool = variables.pandasBool
+    if filterBool is None:
+        filterBool = variables.filterBool
+        
+    return hostName, databaseName, username, password, port, pandasBool, filterBool
+    
